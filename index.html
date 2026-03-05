@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K-Floppy</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "main": "./main.js",
+            "disk-definitions": "./disk-definitions.js",
+            "fat12": "./fat12.js",
+            "iso9660": "./iso9660.js",
+            "mbr": "./mbr.js"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>K-Floppy</h1>
+            <p>Create standard floppy disk images (.img) right in your browser.</p>
+        </header>
+
+        <div class="main-content">
+            <div class="controls-container">
+                <h2>1. Select Disk Format</h2>
+                <div class="control-group">
+                    <label for="output-type">Output Type:</label>
+                    <select id="output-type">
+                        <option value="floppy">Floppy (FAT12 .img)</option>
+                        <option value="iso">CD-ROM (ISO 9660 .iso)</option>
+                        <option value="mbr">MBR Disk (multiple FAT12 partitions .img)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="disk-type">Disk Size:</label>
+                    <select id="disk-type"></select>
+                </div>
+                <div class="control-group" id="partition-count-group" style="display:none">
+                    <label for="partition-count">Partition count (1-4):</label>
+                    <input type="number" id="partition-count" min="1" max="4" step="1" value="2">
+                    <small>Each partition will be the selected disk size and contain the same files.</small>
+                </div>
+                <div class="control-group">
+                    <label for="fs-type">Filesystem:</label>
+                    <select id="fs-type">
+                        <option value="fat12">FAT12</option>
+                    </select>
+                </div>
+                 <div class="control-group">
+                    <label for="volume-label">Volume Label:</label>
+                    <input type="text" id="volume-label" maxlength="11" placeholder="NO NAME">
+                </div>
+            </div>
+
+            <div class="file-manager-container">
+                <div class="fm-header">
+                    <h2>2. Manage Files</h2>
+                    <div class="fm-buttons">
+                        <button id="add-file-btn">Add File(s)</button>
+                        <button id="import-image-btn" title="Import files from an .img or .iso">Import Image</button>
+                        <button id="import-url-btn" title="Import .img/.iso from URL">Import from URL</button>
+                        <button id="new-folder-btn">New Folder</button>
+                        <input type="file" id="file-input" multiple hidden accept=".img,.iso,.ima,.flp,*/*">
+                        <button id="inspect-btn" title="Build an image in memory and inspect its structure">Inspect Disk</button>
+                    </div>
+                </div>
+                <div id="file-list-container">
+                    <ul id="file-list">
+                        <!-- File items will be injected here -->
+                    </ul>
+                </div>
+                <div class="fm-footer">
+                    <p id="capacity-line">Total size: <span id="total-size">0</span> bytes / <span id="disk-size">0</span> bytes</p>
+                    <div class="progress-bar-container">
+                        <div id="progress-bar"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+             <h2>3. Generate Image</h2>
+             <p>Once you've added your files, click here to generate and download the disk image.</p>
+            <button id="generate-btn" disabled>Generate & Download .img</button>
+            <p id="error-message" class="error"></p>
+        </footer>
+    </div>
+
+    <!-- Inspector Modal -->
+    <div id="inspector-backdrop" class="hidden">
+        <div id="inspector-modal" role="dialog" aria-modal="true" aria-labelledby="inspector-title">
+            <div class="inspector-header">
+                <h3 id="inspector-title">Disk Inspector</h3>
+                <button id="inspector-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="inspector-body">
+                <div class="inspector-grid">
+                    <div class="inspector-section">
+                        <h4>Boot Sector (BPB) / Primary Volume Descriptor</h4>
+                        <pre id="bpb-dump" class="mono small"></pre>
+                    </div>
+                    <div class="inspector-section">
+                        <h4>FAT Summary / ISO Path Table</h4>
+                        <pre id="fat-summary" class="mono small"></pre>
+                    </div>
+                    <div class="inspector-section">
+                        <h4>Root Directory</h4>
+                        <pre id="root-dir" class="mono small"></pre>
+                    </div>
+                    <div class="inspector-section">
+                        <h4>Compatibility Checks</h4>
+                        <ul id="compat-checks"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
