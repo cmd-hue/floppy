@@ -87,6 +87,58 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Import Folder button + hidden folder input (uses webkitdirectory/ directory)
+        const importFolderBtn = document.getElementById('import-folder-btn');
+        const folderInput = document.getElementById('folder-input');
+        if (importFolderBtn && folderInput) {
+            importFolderBtn.addEventListener('click', () => {
+                // clear any replace marker
+                delete fileInput.dataset.replaceIndex;
+                folderInput.value = '';
+                folderInput.click();
+            });
+
+            folderInput.addEventListener('change', async (ev) => {
+                const fileList = Array.from(ev.target.files || []);
+                if (fileList.length === 0) return;
+                // For each file, rebuild folder hierarchy under the current path
+                const baseFolder = getFolderAtPath(currentPath) || virtualFiles;
+                for (const f of fileList) {
+                    // Some browsers provide webkitRelativePath, fallback to name only
+                    const rel = f.webkitRelativePath || f.webkitrelativepath || f.name;
+                    const parts = rel.split('/').filter(Boolean);
+                    // walk/create folders except final file part
+                    let nodeList = baseFolder;
+                    for (let i = 0; i < parts.length - 1; i++) {
+                        const part = parts[i];
+                        let next = nodeList.find(n => n.type === 'folder' && n.name === part);
+                        if (!next) {
+                            next = { type: 'folder', name: part, children: [] };
+                            nodeList.push(next);
+                        }
+                        nodeList = next.children;
+                    }
+                    // read file content and push as file entry
+                    try {
+                        const content = new Uint8Array(await f.arrayBuffer());
+                        const fileEntry = {
+                            type: 'file',
+                            name: parts[parts.length - 1],
+                            originalName: parts[parts.length - 1],
+                            size: content.length,
+                            content,
+                            lastModified: new Date(f.lastModified)
+                        };
+                        nodeList.push(fileEntry);
+                    } catch (err) {
+                        console.error('Failed to read folder file', f.name, err);
+                    }
+                }
+                folderInput.value = '';
+                updateUI();
+            });
+        }
+
         // Fetch a remote image and import its entries (ISO or FAT12 image)
         async function fetchAndImportUrl(url) {
             // Basic URL validation
