@@ -32,10 +32,12 @@ export function createISO9660Image(files, volumeId) {
 
     // We will layout as follows:
     // - System Area: 16 sectors (zeros)
-    // - PVD at sector 16
-    // - Volume Descriptor Set Terminator at sector 17
-    // - Path Table (little-endian) after descriptors (1 sector is enough for root only)
-    // - Root Directory data
+    // - Primary Volume Descriptor (PVD) at sector 16
+    // - Supplementary Volume Descriptor (Joliet) at sector 17
+    // - Volume Descriptor Set Terminator at sector 18
+    // - Path Table (little-endian) at sector 19 (for primary)
+    // - Root Directory data (primary) at next LBAs
+    // - Joliet Root Directory data at following LBAs (Unicode directory records)
     // - File data extents (each file aligned to 2KB)
 
     // Compute root directory records (two special + files)
@@ -51,10 +53,13 @@ export function createISO9660Image(files, volumeId) {
 
     // Layout LBAs
     const PVD_LBA = 16;
-    const VDST_LBA = 17;
-    const PATH_TABLE_LBA = 18;
-    const ROOT_DIR_LBA = PATH_TABLE_LBA + 1; // we allocate 1 sector for path table
-    let nextLBA = ROOT_DIR_LBA + rootDirSectors;
+    const SVD_JOLIET_LBA = 17; // Joliet supplementary volume descriptor
+    const VDST_LBA = 18;
+    const PATH_TABLE_LBA = 19;
+    const ROOT_DIR_LBA = PATH_TABLE_LBA + 1; // primary root directory LBA
+    // we'll place Joliet root directory immediately after primary root directory
+    const JOLIET_ROOT_DIR_LBA = ROOT_DIR_LBA + rootDirSectors;
+    let nextLBA = JOLIET_ROOT_DIR_LBA + rootDirSectors; // after primary + joliet root
 
     // Assign file extents
     const fileExtents = [];
@@ -64,7 +69,7 @@ export function createISO9660Image(files, volumeId) {
         nextLBA += Math.ceil(f.size / SECTOR);
     }
 
-    // Fill actual directory records with proper LBAs and sizes
+    // Fill actual directory records with proper LBAs and sizes for primary (ASCII/8.3)
     const rootRecordsFilled = [];
     // . and ..
     rootRecordsFilled.push(makeDirectoryRecord(ROOT_DIR_LBA, rootDirSectors * SECTOR, 2, '\u0000', new Date()));
@@ -73,6 +78,19 @@ export function createISO9660Image(files, volumeId) {
         const f = normFiles[i];
         const ex = fileExtents[i];
         rootRecordsFilled.push(makeDirectoryRecord(ex.lba, ex.size, 0, f.isoName, f.date));
+    }
+
+    // Build Joliet root directory records (Unicode UCS-2BE names)
+    const jolietRecordsFilled = [];
+    jolietRecordsFilled.push(makeDirectoryRecordJoliet(JOLIET_ROOT_DIR_LBA, rootDirSectors * SECTOR, 2, '\u0000', new Date()));
+    jolietRecordsFilled.push(makeDirectoryRecordJoliet(JOLIET_ROOT_DIR_LBA, rootDirSectors * SECTOR, 2, '\u0001', new Date()));
+    for (let i = 0; i < normFiles.length; i++) {
+        const f = normFiles[i];
+        const ex = fileExtents[i];
+        // convert isoName (ASCII) to a Joliet-compatible Unicode filename:
+        // strip version ;1 for storing in Joliet and encode as UCS-2BE
+        const jname = f.isoName.replace(/;1$/i, '');
+        jolietRecordsFilled.push(makeDirectoryRecordJoliet(ex.lba, ex.size, 0, jname, f.date));
     }
 
     // Total image size in sectors
@@ -134,6 +152,47 @@ export function createISO9660Image(files, volumeId) {
         dv.setUint8(off + 881, 1);
     }
 
+    // Supplementary Volume Descriptor (Joliet) - provides Unicode (UCS-2BE) filenames for clients that support Joliet
+    {
+        const off = SVD_JOLIET_LBA * SECTOR;
+        dv.setUint8(off + 0, 2); // Type Code = 2 (Supplementary)
+        writeA(image, off + 1, 'CD001', 5);
+        dv.setUint8(off + 6, 1); // Version
+
+        // System Identifier left blank
+        writeA(image, off + 8, '', 32);
+        // Volume Identifier in UCS-2 is stored by Joliet clients; store ASCII here and let directory records contain UCS-2 names
+        writeA(image, off + 40, volumeId.padEnd(32, ' ').slice(0, 32), 32);
+
+        // Volume Space Size (LE/BE)
+        dv.setUint32(off + 80, totalSectors, true);
+        dv.setUint32(off + 84, totalSectors, false);
+
+        // Vol set size/sequence/logical block size as PVD
+        dv.setUint16(off + 120, 1, true); dv.setUint16(off + 122, 1, false);
+        dv.setUint16(off + 124, 1, true); dv.setUint16(off + 126, 1, false);
+        dv.setUint16(off + 128, SECTOR, true); dv.setUint16(off + 130, SECTOR, false);
+
+        // Path table size omitted (Joliet usually ignores primary path tables)
+        dv.setUint32(off + 132, 0, true);
+        dv.setUint32(off + 136, 0, false);
+        dv.setUint32(off + 140, 0, true);
+        dv.setUint32(off + 148, 0, false);
+
+        // Root Directory Record for Joliet - points to separate Joliet root area
+        const rootRecJ = makeDirectoryRecordJoliet(JOLIET_ROOT_DIR_LBA, rootDirSectors * SECTOR, 2, '\u0000', new Date());
+        image.set(rootRecJ, off + 156);
+
+        // Set Joliet escape sequence "%/E" at offset 88 (per Joliet spec) to denote UCS-2
+        writeA(image, off + 88, '%/E', 32);
+
+        // Application ID etc
+        writeA(image, off + 446, 'JOLIET   ', 128);
+
+        // Version
+        dv.setUint8(off + 881, 1);
+    }
+
     // Volume Descriptor Set Terminator
     {
         const off = VDST_LBA * SECTOR;
@@ -142,23 +201,29 @@ export function createISO9660Image(files, volumeId) {
         dv.setUint8(off + 6, 1);
     }
 
-    // Path Table (LE) - only root
+    // Path Table (LE) - only root (for primary descriptor)
     {
         const off = PATH_TABLE_LBA * SECTOR;
         // Root directory: name length = 1, name = 0x00
         dv.setUint8(off + 0, 1); // name length
         dv.setUint8(off + 1, 0); // extended attr rec len
-        dv.setUint32(off + 2, ROOT_DIR_LBA, true); // LBA of root
+        dv.setUint32(off + 2, ROOT_DIR_LBA, true); // LBA of primary root
         dv.setUint16(off + 6, 1, true); // parent directory number
         dv.setUint8(off + 8, 0x00); // name = 0x00
         // pad to even
         dv.setUint8(off + 9, 0x00);
     }
 
-    // Root Directory Data
+    // Root Directory Data (primary)
     {
         const buf = serializeDirectory(rootRecordsFilled, SECTOR);
         image.set(buf, ROOT_DIR_LBA * SECTOR);
+    }
+
+    // Joliet Root Directory Data (UCS-2BE names)
+    {
+        const bufJ = serializeDirectory(jolietRecordsFilled, SECTOR);
+        image.set(bufJ, JOLIET_ROOT_DIR_LBA * SECTOR);
     }
 
     // File data
@@ -179,6 +244,18 @@ export function createISO9660Image(files, volumeId) {
             buf[off + i] = i < arr.length ? arr[i] : 0x20;
         }
     }
+    // write UCS-2 BE string into buffer (no BOM), pad with 0x00 or 0x20 pairs as needed
+    function writeUCS2BE(buf, off, str, lenBytes) {
+        const enc = [];
+        for (let i = 0; i < str.length; i++) {
+            const code = str.charCodeAt(i);
+            enc.push((code >> 8) & 0xFF);
+            enc.push(code & 0xFF);
+        }
+        for (let i = 0; i < lenBytes; i++) {
+            buf[off + i] = i < enc.length ? enc[i] : 0x00;
+        }
+    }
     function isoDateString(d) {
         // YYYYMMDDHHMMSSccTZ (cc = centiseconds, TZ offset from GMT in 15-min intervals)
         const pad = (n, l=2) => String(n).padStart(l, '0');
@@ -186,7 +263,7 @@ export function createISO9660Image(files, volumeId) {
         return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}00${String.fromCharCode(tz + 0x30)}`.slice(0,17);
     }
     function makeDirectoryRecord(extentLBA, dataLength, flags, name, date) {
-        // name: string, may be '\0' or '\1' for . and ..
+        // Primary (ASCII) directory record builder
         const nameBytes = (name.length === 1 && (name.charCodeAt(0) === 0 || name.charCodeAt(0) === 1))
             ? new Uint8Array([name.charCodeAt(0)])
             : new TextEncoder().encode(name);
@@ -216,6 +293,51 @@ export function createISO9660Image(files, volumeId) {
         rec[32] = nameBytes.length;
         rec.set(nameBytes, 33);
         if (nameBytes.length % 2 === 1) rec[33 + nameBytes.length] = 0; // padding
+        return rec;
+    }
+
+    function makeDirectoryRecordJoliet(extentLBA, dataLength, flags, name, date) {
+        // Joliet directory record: name is UCS-2BE encoded and name length counts bytes
+        // name may be '\0' or '\1' for . and ..
+        let nameBytes;
+        if (name.length === 1 && (name.charCodeAt(0) === 0 || name.charCodeAt(0) === 1)) {
+            nameBytes = new Uint8Array([name.charCodeAt(0)]);
+        } else {
+            // encode as UCS-2BE (no BOM)
+            const arr = [];
+            for (let i = 0; i < name.length; i++) {
+                const c = name.charCodeAt(i);
+                arr.push((c >> 8) & 0xFF);
+                arr.push(c & 0xFF);
+            }
+            nameBytes = new Uint8Array(arr);
+        }
+        const lenDR = 33 + nameBytes.length + (nameBytes.length % 2 ? 1 : 0);
+        const rec = new Uint8Array(lenDR);
+        const dv = new DataView(rec.buffer);
+        dv.setUint8(0, lenDR);
+        dv.setUint8(1, 0); // Extent attr length
+        dv.setUint32(2, extentLBA, true);
+        dv.setUint32(6, extentLBA, false);
+        dv.setUint32(10, dataLength, true);
+        dv.setUint32(14, dataLength, false);
+        // Recording date/time (7 bytes)
+        const y = date.getUTCFullYear() - 1900;
+        rec[18] = y & 0xFF;
+        rec[19] = date.getUTCMonth() + 1;
+        rec[20] = date.getUTCDate();
+        rec[21] = date.getUTCHours();
+        rec[22] = date.getUTCMinutes();
+        rec[23] = date.getUTCSeconds();
+        rec[24] = 0; // GMT offset in 15-min intervals (0 = GMT)
+        rec[25] = flags; // 2 = directory, 0 = file
+        rec[26] = 0; // file unit size
+        rec[27] = 0; // interleave gap size
+        dv.setUint16(28, 1, true); // volume sequence number LE
+        dv.setUint16(30, 1, false); // volume sequence number BE
+        rec[32] = nameBytes.length;
+        rec.set(nameBytes, 33);
+        if (nameBytes.length % 2 === 1) rec[33 + nameBytes.length] = 0; // padding to even
         return rec;
     }
     function computeDirSize(records) {

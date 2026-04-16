@@ -282,7 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleFileClick(e) {
-        // delegation: remove, replace, open folder, or noop
+        // delegation: remove, replace, download, open folder, or noop
         const target = e.target;
         if (target.classList.contains('remove-btn')) {
             const index = parseInt(target.dataset.index, 10);
@@ -298,6 +298,23 @@ document.addEventListener('DOMContentLoaded', () => {
             fileInput.multiple = false;
             fileInput.dataset.replaceIndex = String(index);
             fileInput.click();
+            return;
+        }
+        if (target.classList.contains('download-btn')) {
+            const index = parseInt(target.dataset.index, 10);
+            const folder = getFolderAtPath(currentPath) || virtualFiles;
+            const entry = folder[index];
+            if (entry && entry.type === 'file') {
+                const blob = new Blob([entry.content || new Uint8Array(0)], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = entry.originalName || entry.name || 'file.bin';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
             return;
         }
         // folder open
@@ -335,13 +352,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         <button class="remove-btn" data-index="${index}">&times;</button>
                     `;
                 } else {
-                    // Add a small Replace button next to Remove to swap file contents in-place
+                    // Add small Download and Replace buttons next to Remove to act on file entries
                     li.innerHTML = `
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                           <path d="M4 0h5l3 3v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2zM9.5 3A1.5 1.5 0 0 1 8 1.5V1H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5h-2z"/>
                         </svg>
                         <span class="file-name">${entry.originalName || entry.name}</span>
                         <span class="file-size">${(entry.size || 0).toLocaleString()} B</span>
+                        <button class="download-btn" data-index="${index}" title="Download file">↓</button>
                         <button class="replace-btn" data-index="${index}" title="Replace file">&crarr;</button>
                         <button class="remove-btn" data-index="${index}">&times;</button>
                     `;
