@@ -199,6 +199,28 @@ select, input[type="text"] {
     border-color: #e6e6e6;
 }
 
+/* Download button styling (compact, next to replace) */
+#file-list .download-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: #2b6cb0;
+    cursor: pointer;
+    font-size: 0.95em;
+    line-height: 1;
+    padding: 4px 6px;
+    margin-right: 6px;
+    border-radius: 4px;
+    min-width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+#file-list .download-btn:hover {
+    background: #eef6ff;
+    border-color: #d6e9ff;
+}
+
 .fm-footer {
     margin-top: 15px;
     font-size: 0.9em;
